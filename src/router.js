@@ -1,5 +1,7 @@
 // Controllers
 const User = require("./controllers/user");
+const Video = require("./controllers/video");
+// const path = require("node:path"); 
 
 module.exports = (server) => {
   // ------------------------------------------------ //
@@ -17,4 +19,13 @@ module.exports = (server) => {
 
   // Update a user info
   server.route("put", "/api/user", User.updateUser);
+
+  // ------------------------------------------------ //
+  // ************ USER ROUTES ************* //
+  // ------------------------------------------------ //
+  server.route("get", "/api/videos", Video.getVideos);
+
+  // upload a video file
+  server.route("post", "/api/upload-video", Video.uploadVideo )
+
 };
