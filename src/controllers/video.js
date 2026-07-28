@@ -6,6 +6,58 @@ const { pipeline } = require("node:stream/promises");
 const util = require("../../lib/util");
 const DB = require("../DB");
 const FF = require("../../lib/FF");
+const { json } = require("node:stream/consumers");
+
+
+// resize a video file (creates a new video file)
+const resizeVideo = async (req, res, handleErr) => {
+    const videoId = req.body.videoId;
+    const width = Number(req.body.width);
+    const height = Number(req.body.height);
+
+    DB.update();
+    const video = DB.videos.find((v) => v.videoId === videoId);
+
+    // 1. Guard check for missing video
+    if (!video) {
+        return handleErr({ status: 404, message: "Video not found" });
+    }
+
+    // 2. Consistent relative disk paths
+    const originalVideoPath = `./storage/${video.videoId}/original.${video.extension}`;
+    const targetVideoPath = `./storage/${video.videoId}/${width}x${height}.${video.extension}`;
+
+    try {
+        // 3. Initialize resizes object if undefined
+        video.resizes = video.resizes || {};
+        video.resizes[`${width}x${height}`] = { processing: true };
+        DB.save();
+
+        await FF.resize(
+            originalVideoPath,
+            targetVideoPath,
+            width,
+            height
+        );
+
+        video.resizes[`${width}x${height}`].processing = false;
+        DB.save();
+
+        res.status(200).json({
+            status: "success",
+            message: "The video was resized successfully!"
+        });
+    } catch (e) {
+        // Clean up object state and partial file on failure
+        if (video?.resizes?.[`${width}x${height}`]) {
+            delete video.resizes[`${width}x${height}`];
+            DB.save();
+        }
+
+        await util.deleteFile(targetVideoPath);
+        return handleErr(e);
+    }
+};
 
 // return list of all videos that a logged in user has uploaded
 const getVideos = (req, res, handleError) => {
@@ -91,6 +143,41 @@ const uploadVideo = async (req, res, handleError) => {
     }
 };
 
+// Extract the audio for a video file (can only be done once per video)
+const extractAudio = async (req, res, handleErr) => {
+
+    const videoId = req.params.get("videoId");
+
+    DB.update(); 
+    const video = DB.videos.find((video) => video.videoId === videoId);
+
+    if(video.extractedAudio) {
+        return handleErr({
+            status: 400,
+            message: "The audio has already been extracted for this video."
+        })
+    }
+
+    const originalVideoPath = `./storage/${videoId}/original.${video.extension}`;
+    const targetAudioPath = `./storage/${videoId}/audio.aac`;
+    try{
+        
+        await FF.extractAudio(originalVideoPath, targetAudioPath);
+
+        video.extractedAudio = true;
+
+        DB.save();
+
+        res.status(200).json({
+            status: "success",
+            message: "The audio was extracted successfully"
+        })
+    } catch(e) {
+        await util.deleteFile(targetAudioPath);
+        return handleErr(e);
+    }
+
+}
 // Return a video assets to client
 const getVideoAssets = async (req, res, handleErr) => {
     console.log(req.params, " daniel")
@@ -166,7 +253,10 @@ const getVideoAssets = async (req, res, handleErr) => {
 const controller = {
     getVideos,
     uploadVideo,
-    getVideoAssets
+    getVideoAssets,
+    resizeVideo,
+    extractAudio
+
 };
 
 module.exports = controller;
