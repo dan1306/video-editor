@@ -7,14 +7,23 @@ const util = require("../../lib/util");
 const DB = require("../DB");
 const FF = require("../../lib/FF");
 const { json } = require("node:stream/consumers");
+const jobQueue = require('../../lib/JobQueue');
+const cluster = require("node:cluster");
+
+let jobs;
+if(cluster.isPrimary){
+    jobs = new jobQueue();
+}
+
+
 
 
 // resize a video file (creates a new video file)
 const resizeVideo = async (req, res, handleErr) => {
     const videoId = req.body.videoId;
     const width = Number(req.body.width);
-    const height = Number(req.body.height);
-
+    const height = Number(req.body.height);  
+    
     DB.update();
     const video = DB.videos.find((v) => v.videoId === videoId);
 
@@ -23,40 +32,30 @@ const resizeVideo = async (req, res, handleErr) => {
         return handleErr({ status: 404, message: "Video not found" });
     }
 
-    // 2. Consistent relative disk paths
-    const originalVideoPath = `./storage/${video.videoId}/original.${video.extension}`;
-    const targetVideoPath = `./storage/${video.videoId}/${width}x${height}.${video.extension}`;
 
-    try {
-        // 3. Initialize resizes object if undefined
-        video.resizes = video.resizes || {};
-        video.resizes[`${width}x${height}`] = { processing: true };
-        DB.save();
+    // 3. Initialize resizes object if undefined
+    video.resizes = video.resizes || {};
+    video.resizes[`${width}x${height}`] = { processing: true };
+    DB.save();
 
-        await FF.resize(
-            originalVideoPath,
-            targetVideoPath,
+    if(cluster.isPrimary) {
+        jobs.enqueue({
+            type: "resize",
+            videoId,
             width,
-            height
-        );
-
-        video.resizes[`${width}x${height}`].processing = false;
-        DB.save();
-
-        res.status(200).json({
-            status: "success",
-            message: "The video was resized successfully!"
+            height,
+            video 
         });
-    } catch (e) {
-        // Clean up object state and partial file on failure
-        if (video?.resizes?.[`${width}x${height}`]) {
-            delete video.resizes[`${width}x${height}`];
-            DB.save();
-        }
-
-        await util.deleteFile(targetVideoPath);
-        return handleErr(e);
+    } else {
+        process.send({
+            messageType: "new-resize",
+            data: {videoId, width, height, video},
+        })
     }
+    res.status(200).json({
+        status: "success",
+        message: "The video was resized successfully!"
+    }); 
 };
 
 // return list of all videos that a logged in user has uploaded
